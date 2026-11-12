@@ -1,0 +1,145 @@
+@import url("https://fonts.googleapis.com/css2?family=Geist:ital,wght@0,100..900;1,100..900&display=swap");
+
+@import "tailwindcss";
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #040404;
+  color: white;
+  font-family: "Geist", sans-serif;
+  font-optical-sizing: auto;
+}
+
+body.active {
+  height: 100vh;
+  overflow: hidden;
+}
+
+@layer base {
+  .body-h1 {
+    @apply text-[6rem] font-semibold leading-[93%] tracking-[-0.02em];
+  }
+
+  .body-h2 {
+    @apply text-[5rem] font-semibold leading-[93%] tracking-[-0.02em];
+  }
+
+  .body-2xl {
+    @apply text-4xl font-medium leading-[110%];
+  }
+
+  .body-xl {
+    @apply text-3xl font-medium leading-[100%];
+  }
+  .body-lg {
+    @apply text-xl font-medium leading-[100%];
+  }
+
+  .body-sm {
+    @apply text-sm leading-[100%];
+  }
+
+  .center-x {
+    @apply translate-x-[-50%] left-[50%];
+  }
+  .center-y {
+    @apply translate-y-[-50%] top-[50%];
+  }
+  .center-xy {
+    @apply translate-x-[-50%] left-[50%] translate-y-[-50%] top-[50%];
+  }
+
+  .tool {
+    @apply scale-[var(--tool-scale)] cursor-pointer;
+  }
+}
+
+nav {
+  backdrop-filter: blur(10px);
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+@custom-variant 1024 (@media (max-width: 1024px));
+@custom-variant 850 (@media (max-width: 850px));
+@custom-variant 768 (@media (max-width: 768px));
+
+.toolPill {
+  transition: 0.4s ease-in-out;
+  transform: translateY(100%) scale(0.5) translateX(50%);
+}
+
+.toolPill.active {
+  opacity: 1;
+  transform: translateY(-130%) scale(1) translateX(50%);
+}
+
+.cta-underline {
+  position: relative;
+}
+
+.cta-underline::before {
+  position: absolute;
+  content: "";
+  background: white;
+  height: 2px;
+  border-radius: 2px;
+  bottom: -2px;
+  right: 0%;
+  width: 100%;
+  transform-origin: right;
+  transition: 0.3s ease-in-out;
+}
+
+.cta-underline::after {
+  position: absolute;
+  content: "";
+  background: rgba(255, 255, 255, 0.496);
+  height: 2px;
+  border-radius: 2px;
+  bottom: -2px;
+  left: 0%;
+  width: 0%;
+  transform-origin: right;
+  transition: 0.3s ease-in-out;
+  transition-delay: 0.06s;
+}
+
+.cta-underline:hover::before {
+  width: 0%;
+}
+.cta-underline:hover::after {
+  width: 100%;
+}
+
+.site-arrow .arrow-up {
+  transition: 0.3s ease-in-out;
+}
+
+.site-arrow:hover .arrow-up {
+  transform: rotate(45deg);
+}
+
+/* Prevent horizontal page scrolling */
+body {
+  overflow-x: clip;
+}
+
+.custom-scroll::-webkit-scrollbar {
+  height: 3px;
+  width: 4px;
+}
+.custom-scroll::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 10px;
+}
+
+/* Track */
+.custom-scroll::-webkit-scrollbar-track {
+  background: #0b0615;
+}
