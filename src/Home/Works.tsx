@@ -14,7 +14,7 @@ gsap.registerPlugin(Flip);
 export default function Works() {
   return (
     <section className="mt-[40vh] px-[40px]">
-      <p className="body-xl">Selected Works.</p>
+      <h2 className="body-xl">Selected Works.</h2>
 
       {/* Container for Work cards and details */}
       <div className="flex flex-col gap-[200px] mt-[90px]">
@@ -169,7 +169,7 @@ function Work({ title, siteLink, details, img, summary }: Work) {
             </button>
 
             {/* Container for content */}
-            <ReactLenis className="relative z-[2] min-h-[100dvh] w-full overflow-y-scroll no-scrollbar">
+            <ReactLenis className="relative z-[2] flex flex-col justify-center min-h-[100dvh] w-full overflow-y-scroll no-scrollbar">
               <div className=" flex justify-start gap-[2vw] w-full h-full px-[0px] pt-[100px]">
                 {/* Container for expanded image */}
                 <div className="flex flex-col gap-[4vh] min-h-full w-full max-w-[900px] pb-[70px]">
@@ -182,7 +182,7 @@ function Work({ title, siteLink, details, img, summary }: Work) {
                 </div>
 
                 {/* Container for details about work */}
-                <div className="flex flex-col w-full gap-[10px] h-full pt-[40px]">
+                <div className="flex flex-col w-full gap-[10px] h-full pt-[40px] relative z-[10]">
                   <div className="flex justify-between max-w-[600px]">
                     <h3 className="text-5xl font-medium tracking-tight uppercase ml-[6vw]">
                       {title}
@@ -217,9 +217,15 @@ function Work({ title, siteLink, details, img, summary }: Work) {
                 <p>A creative website for this and that</p> */}
                 </div>
               </div>
-            </ReactLenis>
 
-            <div className="absolute w-full h-full bg-black/80"></div>
+              {/* Overlay */}
+              <div
+                onClick={() => {
+                  setOpen(false);
+                }}
+                className="absolute inset-0 w-full h-full bg-black/80"
+              ></div>
+            </ReactLenis>
           </motion.div>
         )}
       </AnimatePresence>

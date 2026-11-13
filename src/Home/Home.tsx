@@ -6,6 +6,7 @@ import { ScrollTrigger } from "gsap/all";
 import About from "./About";
 import Tools from "./Tools";
 import Works from "./Works";
+import Contact from "./Contact";
 
 export default function Home() {
   gsap.registerPlugin(ScrollTrigger);
@@ -18,6 +19,7 @@ export default function Home() {
       <About />
       <Tools />
       <Works />
+      <Contact />
     </main>
   );
 }
