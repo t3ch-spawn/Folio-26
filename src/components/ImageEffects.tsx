@@ -1,95 +1,46 @@
-import {
-  Suspense,
-  useCallback,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
-import {
-  Canvas,
-  extend,
-  useFrame,
-  useLoader,
-  useThree,
-  type ThreeElement,
-} from "@react-three/fiber";
-import { PerspectiveCamera, View, shaderMaterial } from "@react-three/drei";
+import { useEffect, useId, useLayoutEffect, useRef } from "react";
 import { useLenis } from "lenis/react";
 import * as THREE from "three";
-
 import { useImageLayer } from "./ImageLayerContext";
 
-// --------------------------------------------------
-// Animation settings
-// --------------------------------------------------
+const BEND_STRENGTH = 0.0045;
+const BEND_CENTERING = 0.35; // 0 = anchored middle, 0.5 = evenly distributed bend
+const MAX_BEND = 0.4;
+const BEND_SMOOTHING = 6;
+const MAX_DPR = 2;
+const IMAGE_SCALE = 1.086;
+const BEND_SHRINK = 0.24; // 0 = none, 1 = full fit, 2+ = stronger
+const FIT_MARGIN = 0.96;
+const PREPAINT_MARGIN = 80;
 
-const BEND_STRENGTH = 0.0065; // Increase for more bend.
-const MAX_BEND = 0.4; // Increase if the bend reaches its limit.
-const BEND_SMOOTHING = 12; // Lower = softer/slower response.
-
-const VELOCITY_SMOOTHING = 7;
-
-// Don't decay between individual scroll events.
-// Only release the velocity after events actually stop.
-const SCROLL_IDLE_DELAY_MS = 100;
-const SCROLL_RELEASE_MS = 140;
-
-const BASE_CURVES = 0.2;
-const CURVE_SMOOTHING = 4.6;
-
-const PLANE_WIDTH = 4;
-const PLANE_HEIGHT = 3;
-const IMAGE_SCALE_DIVISOR = 1.086;
-
-// Start preparing canvases before they enter the screen.
-const PRELOAD_MARGIN = 300;
-
-// Avoid repeatedly recreating a Canvas near the viewport boundary.
-const OFFSCREEN_RELEASE_DELAY_MS = 1500;
-
-type ImageMode = "work" | "aberration";
-
-interface ScrollSample {
-  velocity: number;
-  updatedAt: number;
+type Mode = "work" | "aberration";
+interface Props {
+  img: string;
+  mode: Mode;
+  isPlaying?: boolean;
+  elevated?: boolean;
 }
-
-interface AnimationState {
+interface Card {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  poster: HTMLImageElement;
+  texture?: THREE.Texture;
+  mode: Mode;
+  playing: boolean;
+  shown: boolean;
+  near: boolean;
+  dirty: boolean;
+  width: number;
+  height: number;
   time: number;
-  velocity: number;
-  curves: number;
+  wave: number;
   bend: number;
-  aberration: number;
+  fringe: number;
 }
 
-function useInlineCanvas() {
-  const [inline, setInline] = useState(() =>
-    typeof window !== "undefined"
-      ? window.matchMedia("(any-pointer: coarse)").matches
-      : false,
-  );
-
-  useEffect(() => {
-    const query = window.matchMedia("(any-pointer: coarse)");
-
-    const update = () => {
-      setInline(query.matches);
-    };
-
-    update();
-
-    query.addEventListener("change", update);
-
-    return () => {
-      query.removeEventListener("change", update);
-    };
-  }, []);
-
-  return inline;
-}
+const cards = new Set<Card>();
+const scroll = { input: 0, sample: -Infinity, velocity: 0, bend: 0 };
+let wake: () => void = () => {};
 
 const vertexShader = /* glsl */ `
   precision mediump float;
@@ -99,6 +50,7 @@ const vertexShader = /* glsl */ `
   uniform float uTime;
   uniform float uCurves;
   uniform float uScrollBend;
+  uniform float uFit;
 
   void main() {
     vUv = uv;
@@ -106,16 +58,14 @@ const vertexShader = /* glsl */ `
     vec4 modelPosition = modelMatrix * vec4(position, 1.0);
 
     modelPosition.z +=
-      sin(
-        (modelPosition.z + modelPosition.y * 2.0)
-        + uTime * 2.3
-      ) * uCurves;
+      sin((modelPosition.z + modelPosition.y * 2.0) + uTime * 2.3)
+      * uCurves;
 
     float edge = abs(uv.x - 0.5) * 4.4;
-    modelPosition.y += uScrollBend * edge * edge;
+    modelPosition.y += uScrollBend * (edge * edge - 4.84 * ${BEND_CENTERING});
 
-    gl_Position =
-      projectionMatrix * viewMatrix * modelPosition;
+    gl_Position = projectionMatrix * viewMatrix * modelPosition;
+    gl_Position.xy *= uFit;
   }
 `;
 
@@ -128,7 +78,7 @@ const fragmentShader = /* glsl */ `
   uniform float uImageAspect;
   uniform float uPlaneAspect;
   uniform float uAberration;
-  uniform float uOpacity;
+
 
   void main() {
     vec2 ratio = vec2(
@@ -136,6 +86,7 @@ const fragmentShader = /* glsl */ `
       min(uImageAspect / uPlaneAspect, 1.0)
     );
 
+    // Preserves your original image alignment.
     vec2 uv = vec2(
       vUv.x * ratio.x + (1.0 - ratio.x) * 0.02,
       vUv.y * ratio.y + (1.0 - ratio.y) * 0.02
@@ -153,606 +104,242 @@ const fragmentShader = /* glsl */ `
       gl_FragColor = vec4(r, g, b, 1.0);
     }
 
-    gl_FragColor.a *= uOpacity;
+
   }
 `;
 
-const PortfolioImageMaterial = shaderMaterial(
-  {
-    uTexture: null as THREE.Texture | null,
-    uTime: 0,
-    uCurves: 0,
-    uScrollBend: 0,
-    uAberration: 0,
-    uImageAspect: 1,
-    uPlaneAspect: 1,
-    uOpacity: 1,
-  },
-  vertexShader,
-  fragmentShader,
-);
+function startRenderer() {
+  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false });
+  renderer.setClearColor(0, 0);
+  renderer.setScissorTest(true);
 
-extend({ PortfolioImageMaterial });
+  const uniforms = {
+    uTexture: { value: null as THREE.Texture | null },
+    uImageAspect: { value: 1 }, uPlaneAspect: { value: 1 },
+    uTime: { value: 0 }, uCurves: { value: 0 }, uScrollBend: { value: 0 },
+    uAberration: { value: 0 }, uFit: { value: 1 },
+  };
+  const material = new THREE.ShaderMaterial({
+    uniforms, vertexShader, fragmentShader, depthTest: false, depthWrite: false,
+    transparent: true,
+  });
+  const geometry = new THREE.PlaneGeometry(1, 1, 32, 32);
+  const mesh = new THREE.Mesh(geometry, material);
+  const scene = new THREE.Scene();
+  scene.add(mesh);
+  const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 100);
+  const surface = renderer.domElement;
+  const fovFactor = 2 * Math.tan(THREE.MathUtils.degToRad(75 / 2));
 
-declare module "@react-three/fiber" {
-  interface ThreeElements {
-    portfolioImageMaterial: ThreeElement<typeof PortfolioImageMaterial>;
+  let frame = 0;
+  let previous = 0;
+  let lost = false;
+  function schedule() {
+    if (!frame && !lost && !document.hidden) frame = requestAnimationFrame(draw);
   }
-}
 
-type MaterialInstance = InstanceType<typeof PortfolioImageMaterial>;
+  function draw(now: number) {
+    frame = 0;
+    const dt = previous ? Math.min((now - previous) / 1000, 0.05) : 1 / 60;
+    previous = now;
+    const decay = Math.exp(-Math.max(0, now - scroll.sample - 100) / 140);
+    const target = THREE.MathUtils.clamp(scroll.input * decay, -150, 150);
+    scroll.velocity = THREE.MathUtils.damp(scroll.velocity, target, 12, dt);
+    scroll.bend = THREE.MathUtils.damp(scroll.bend,
+      THREE.MathUtils.clamp(scroll.velocity * BEND_STRENGTH, -MAX_BEND, MAX_BEND),
+      BEND_SMOOTHING, dt);
+    if (Math.abs(target) + Math.abs(scroll.velocity) < 0.01) scroll.velocity = 0;
+    if (!scroll.velocity && Math.abs(scroll.bend) < 0.00001) scroll.bend = 0;
 
-interface ImageSceneProps {
-  img: string;
-  mode: ImageMode;
-  isPlaying: boolean;
-  container: RefObject<HTMLDivElement | null>;
-  opacity: number;
-  inline: boolean;
-  scrollSample: RefObject<ScrollSample>;
-  animation: RefObject<AnimationState>;
-  onReady?: () => void;
-  onNotReady?: () => void;
-}
+    let waving = false;
+    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+    for (const card of cards) {
+      if (!card.texture || !card.shown || (!card.near && !card.playing)) continue;
+      if (card.width <= 0 || card.height <= 0) continue;
 
-function ImageScene({
-  img,
-  mode,
-  isPlaying,
-  container,
-  opacity,
-  inline,
-  scrollSample,
-  animation,
-  onReady,
-  onNotReady,
-}: ImageSceneProps) {
-  const image = useLoader(THREE.TextureLoader, img);
-  const gl = useThree((state) => state.gl);
+      const work = card.mode === "work";
+      const bend = work ? scroll.bend : 0;
+      const fringe = Math.min(Math.abs(scroll.velocity) * (work ? 0.015 : 0.008), work ? 0.02 : 0.04);
+      const oldWave = card.wave;
+      const targetWave = work && card.playing ? 0.2 : 0;
+      card.wave = THREE.MathUtils.damp(card.wave, targetWave, 4.6, dt);
+      if (Math.abs(card.wave - targetWave) < 0.00001) card.wave = targetWave;
+      if (card.playing) card.time += dt * 4;
+      waving ||= card.playing || card.wave !== targetWave;
 
-  const meshRef = useRef<THREE.Mesh>(null);
-  const materialRef = useRef<MaterialInstance>(null);
+      const width = Math.max(1, Math.round(card.width * dpr));
+      const height = Math.max(1, Math.round(card.height * dpr));
+      const resized = width !== card.canvas.width || height !== card.canvas.height;
+      if (!resized && !card.dirty && !card.playing && oldWave === card.wave &&
+          bend === card.bend && fringe === card.fringe) continue;
 
-  const dimensionsRef = useRef({ width: 0, height: 0 });
-  const readyFramesRef = useRef(0);
-  const notifiedRef = useRef(false);
-  const readyRafRef = useRef<number | null>(null);
-
-  const isWork = mode === "work";
-
-  const source = image.image as HTMLImageElement;
-  const imageAspect = source.width / source.height || 1;
-
-  useLayoutEffect(() => {
-    const element = container.current;
-    if (!element) return;
-
-    const measure = () => {
-      const rect = element.getBoundingClientRect();
-
-      dimensionsRef.current = {
-        width: rect.width,
-        height: rect.height,
-      };
-    };
-
-    measure();
-
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [container]);
-
-  useEffect(() => {
-    const canvas = gl.domElement;
-
-    const resetReadiness = () => {
-      readyFramesRef.current = 0;
-      notifiedRef.current = false;
-
-      if (readyRafRef.current !== null) {
-        cancelAnimationFrame(readyRafRef.current);
-        readyRafRef.current = null;
+      if (surface.width < width || surface.height < height) {
+        renderer.setSize(Math.max(surface.width, width), Math.max(surface.height, height), false);
       }
-
-      onNotReady?.();
-    };
-
-    canvas.addEventListener("webglcontextlost", resetReadiness);
-
-    canvas.addEventListener("webglcontextrestored", resetReadiness);
-
-    return () => {
-      canvas.removeEventListener("webglcontextlost", resetReadiness);
-
-      canvas.removeEventListener("webglcontextrestored", resetReadiness);
-
-      if (readyRafRef.current !== null) {
-        cancelAnimationFrame(readyRafRef.current);
+      if (resized) {
+        card.canvas.width = width;
+        card.canvas.height = height;
       }
-    };
-  }, [gl, onNotReady]);
+      const aspect = card.width / card.height;
+      const distance = work ? 3.3 : 1.3;
+      camera.position.z = distance;
+      camera.zoom = work ? 0.98 : 1;
+      camera.aspect = aspect;
+      camera.updateProjectionMatrix();
+      const viewHeight = fovFactor * distance / camera.zoom;
+      mesh.scale.set(viewHeight * aspect / IMAGE_SCALE, viewHeight / IMAGE_SCALE, 1);
+      const expansion = distance / (distance - Math.abs(card.wave));
+      const maxBendOffset = Math.abs(bend) * 4.84 * (1 - BEND_CENTERING);
+      const halfHeight = (viewHeight / (2 * IMAGE_SCALE) + maxBendOffset) * expansion;
+      const source = card.texture.image as HTMLImageElement;
+      uniforms.uTexture.value = card.texture;
+      uniforms.uImageAspect.value = source.width / source.height;
+      uniforms.uPlaneAspect.value = aspect;
+      uniforms.uTime.value = card.time;
+      uniforms.uCurves.value = card.wave;
+      uniforms.uScrollBend.value = bend;
+      uniforms.uAberration.value = fringe;
+      const fittedScale = Math.min(1, viewHeight * FIT_MARGIN / (2 * halfHeight),
+        FIT_MARGIN * IMAGE_SCALE / expansion);
+      uniforms.uFit.value = Math.pow(fittedScale, Math.max(0, BEND_SHRINK));
 
-  useFrame(({ camera, size }, delta) => {
-    const mesh = meshRef.current;
-    const material = materialRef.current;
-
-    if (!mesh || !material || gl.getContext().isContextLost()) {
-      return;
+      renderer.setViewport(0, 0, width, height);
+      renderer.setScissor(0, 0, width, height);
+      renderer.render(scene, camera);
+      card.ctx.globalCompositeOperation = "copy";
+      card.ctx.drawImage(surface, 0, surface.height - height, width, height, 0, 0, width, height);
+      if (card.dirty) card.poster.style.visibility = "hidden";
+      card.dirty = false;
+      card.bend = bend;
+      card.fringe = fringe;
     }
-
-    const dt = Math.min(delta, 0.05);
-    const state = animation.current;
-
-    // Capture scroll events outside the Canvas, then consume their
-    // latest sample here. Do not reset/decay targets between events.
-    const sample = scrollSample.current;
-    const age = performance.now() - sample.updatedAt;
-
-    const release =
-      age <= SCROLL_IDLE_DELAY_MS
-        ? 1
-        : Math.exp(-(age - SCROLL_IDLE_DELAY_MS) / SCROLL_RELEASE_MS);
-
-    const velocityTarget = THREE.MathUtils.clamp(
-      sample.velocity * release,
-      -150,
-      150,
-    );
-
-    state.velocity = THREE.MathUtils.damp(
-      state.velocity,
-      velocityTarget,
-      VELOCITY_SMOOTHING,
-      dt,
-    );
-
-    const bendTarget = isWork
-      ? THREE.MathUtils.clamp(
-          state.velocity * BEND_STRENGTH,
-          -MAX_BEND,
-          MAX_BEND,
-        )
-      : 0;
-
-    state.bend = THREE.MathUtils.damp(
-      state.bend,
-      bendTarget,
-      BEND_SMOOTHING,
-      dt,
-    );
-
-    const aberrationTarget = THREE.MathUtils.clamp(
-      Math.abs(state.velocity) * (isWork ? 0.015 : 0.008),
-      0,
-      isWork ? 0.02 : 0.04,
-    );
-
-    state.aberration = THREE.MathUtils.damp(
-      state.aberration,
-      aberrationTarget,
-      10,
-      dt,
-    );
-
-    if (isWork && isPlaying) {
-      state.time += dt * 4;
-    }
-
-    state.curves = THREE.MathUtils.damp(
-      state.curves,
-      isWork && isPlaying ? BASE_CURVES : 0,
-      CURVE_SMOOTHING,
-      dt,
-    );
-
-    material.uTime = state.time;
-    material.uCurves = state.curves;
-    material.uScrollBend = state.bend;
-    material.uAberration = state.aberration;
-
-    material.uOpacity = THREE.MathUtils.damp(
-      material.uOpacity,
-      opacity,
-      10,
-      dt,
-    );
-
-    let width: number;
-    let height: number;
-
-    if (inline) {
-      // The real Canvas travels with its DOM container.
-      // R3F owns its framebuffer and camera sizing.
-      width = size.width;
-      height = size.height;
-    } else {
-      ({ width, height } = dimensionsRef.current);
-
-      // CSS transforms aren't reported by ResizeObserver.
-      if (isPlaying && container.current) {
-        const rect = container.current.getBoundingClientRect();
-
-        width = rect.width;
-        height = rect.height;
-
-        dimensionsRef.current = { width, height };
-      }
-    }
-
-    if (width <= 0 || height <= 0) return;
-
-    const aspect = width / height;
-    const perspective = camera as THREE.PerspectiveCamera;
-
-    if (!inline && perspective.aspect !== aspect) {
-      perspective.aspect = aspect;
-      perspective.updateProjectionMatrix();
-    }
-
-    material.uPlaneAspect = aspect;
-
-    const distance = Math.abs(perspective.position.z - mesh.position.z);
-
-    const visibleHeight =
-      (2 * Math.tan(THREE.MathUtils.degToRad(perspective.fov) / 2) * distance) /
-      perspective.zoom;
-
-    mesh.scale.set(
-      (visibleHeight * aspect) / PLANE_WIDTH / IMAGE_SCALE_DIVISOR,
-      visibleHeight / PLANE_HEIGHT / IMAGE_SCALE_DIVISOR,
-      1,
-    );
-
-    // Let the texture upload and several frames render before
-    // fading from the static fallback to the mobile Canvas.
-    if (onReady && !notifiedRef.current) {
-      readyFramesRef.current += 1;
-
-      if (readyFramesRef.current >= 3) {
-        notifiedRef.current = true;
-
-        readyRafRef.current = requestAnimationFrame(() => {
-          readyRafRef.current = null;
-          onReady();
-        });
-      }
-    }
-  });
-
-  return (
-    <mesh ref={meshRef} frustumCulled={false}>
-      <planeGeometry
-        args={[PLANE_WIDTH, PLANE_HEIGHT, isWork ? 32 : 1, isWork ? 32 : 1]}
-      />
-
-      <portfolioImageMaterial
-        ref={materialRef}
-        uTexture={image}
-        uImageAspect={imageAspect}
-        transparent
-        depthTest={false}
-        depthWrite={false}
-      />
-    </mesh>
-  );
-}
-
-interface ShaderImageProps {
-  img: string;
-  mode: ImageMode;
-  isPlaying?: boolean;
-  elevated?: boolean;
-}
-
-export function ShaderImage({
-  img,
-  mode,
-  isPlaying = false,
-  elevated = false,
-}: ShaderImageProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const viewId = useId();
-  const inline = useInlineCanvas();
-
-  const { activeView, setActiveView } = useImageLayer();
-
-  const [retainCanvas, setRetainCanvas] = useState(false);
-  const [canvasReady, setCanvasReady] = useState(false);
-
-  const scrollSample = useRef<ScrollSample>({
-    velocity: 0,
-    updatedAt: 0,
-  });
-
-  // These survive an offscreen Canvas being released/recreated.
-  const animation = useRef<AnimationState>({
-    time: 0,
-    velocity: 0,
-    curves: 0,
-    bend: 0,
-    aberration: 0,
-  });
-
-  const isWork = mode === "work";
-
-  // Subscribe in the DOM component, outside the separate Canvas root.
-  useLenis((lenis) => {
-    scrollSample.current.velocity = -lenis.velocity;
-    scrollSample.current.updatedAt = performance.now();
-  });
-
-  useLayoutEffect(() => {
-    if (!elevated) return;
-
-    setActiveView(viewId);
-
-    return () => {
-      setActiveView((current) => (current === viewId ? null : current));
-    };
-  }, [elevated, viewId, setActiveView]);
-
-  useLayoutEffect(() => {
-    if (!inline) return;
-
-    const element = containerRef.current;
-    if (!element) return;
-
-    let releaseTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const clearReleaseTimer = () => {
-      if (releaseTimer !== null) {
-        clearTimeout(releaseTimer);
-        releaseTimer = null;
-      }
-    };
-
-    const update = (near: boolean) => {
-      clearReleaseTimer();
-
-      if (near) {
-        setRetainCanvas(true);
-      } else {
-        releaseTimer = setTimeout(() => {
-          setRetainCanvas(false);
-        }, OFFSCREEN_RELEASE_DELAY_MS);
-      }
-    };
-
-    const rect = element.getBoundingClientRect();
-
-    update(
-      rect.bottom >= -PRELOAD_MARGIN &&
-        rect.top <= window.innerHeight + PRELOAD_MARGIN,
-    );
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        update(entry.isIntersecting);
-      },
-      { rootMargin: `${PRELOAD_MARGIN}px` },
-    );
-
-    observer.observe(element);
-
-    return () => {
-      clearReleaseTimer();
-      observer.disconnect();
-    };
-  }, [inline]);
-
-  const mountCanvas = retainCanvas || elevated || isPlaying;
-
-  useLayoutEffect(() => {
-    if (!mountCanvas) {
-      setCanvasReady(false);
-    }
-  }, [mountCanvas]);
-
-  useLayoutEffect(() => {
-    setCanvasReady(false);
-  }, [img]);
-
-  const handleReady = useCallback(() => {
-    setCanvasReady(true);
-  }, []);
-
-  const handleNotReady = useCallback(() => {
-    setCanvasReady(false);
-  }, []);
-
-  const opacity = activeView === null || activeView === viewId ? 1 : 0;
-
-  const position: [number, number, number] = [0, 0, isWork ? 3.3 : 1.3];
-
-  const showCanvas = mountCanvas && canvasReady;
-
-  return (
-    <div
-      ref={containerRef}
-      className="image-canvas"
-      style={{
-        position: "relative",
-        width: "100%",
-        height: "100%",
-        pointerEvents: "none",
-        opacity: inline ? opacity : 1,
-        transition: inline ? "opacity 200ms ease" : undefined,
-      }}
-    >
-      {inline ? (
-        <>
-          {/* Matches the resting shader's scale and image alignment.
-              Remains available while WebGL loads or restores. */}
-          <img
-            src={img}
-            alt=""
-            aria-hidden="true"
-            draggable={false}
-            decoding="async"
-            style={{
-              position: "absolute",
-              left: "50%",
-              top: "50%",
-              width: `${100 / IMAGE_SCALE_DIVISOR}%`,
-              height: `${100 / IMAGE_SCALE_DIVISOR}%`,
-              maxWidth: "none",
-              transform: "translate(-50%, -50%)",
-              objectFit: "cover",
-              objectPosition: "2% 2%",
-              pointerEvents: "none",
-              opacity: showCanvas ? 0 : 1,
-              transition: "opacity 180ms ease",
-            }}
-          />
-
-          {mountCanvas && (
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                opacity: showCanvas ? 1 : 0,
-                transition: "opacity 180ms ease",
-                pointerEvents: "none",
-              }}
-            >
-              <Canvas
-                dpr={[1, 2]}
-                camera={{
-                  position,
-                  zoom: isWork ? 0.98 : 1,
-                  fov: 75,
-                }}
-                gl={{
-                  antialias: false,
-                  alpha: true,
-                }}
-                resize={{
-                  scroll: false,
-                  debounce: {
-                    scroll: 0,
-                    resize: 0,
-                  },
-                }}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
-                  pointerEvents: "none",
-                  touchAction: "pan-y pinch-zoom",
-                }}
-                onCreated={({ gl }) => {
-                  gl.domElement.style.touchAction = "pan-y pinch-zoom";
-                }}
-              >
-                <Suspense fallback={null}>
-                  <ImageScene
-                    key={img}
-                    img={img}
-                    mode={mode}
-                    isPlaying={isPlaying}
-                    container={containerRef}
-                    opacity={1}
-                    inline
-                    scrollSample={scrollSample}
-                    animation={animation}
-                    onReady={handleReady}
-                    onNotReady={handleNotReady}
-                  />
-                </Suspense>
-              </Canvas>
-            </div>
-          )}
-        </>
-      ) : (
-        <View
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            pointerEvents: "none",
-          }}
-        >
-          <PerspectiveCamera
-            makeDefault
-            position={position}
-            zoom={isWork ? 0.98 : 1}
-            fov={75}
-          />
-
-          <Suspense fallback={null}>
-            <ImageScene
-              key={img}
-              img={img}
-              mode={mode}
-              isPlaying={isPlaying}
-              container={containerRef}
-              opacity={opacity}
-              inline={false}
-              scrollSample={scrollSample}
-              animation={animation}
-            />
-          </Suspense>
-        </View>
-      )}
-    </div>
-  );
-}
-
-function ClearCanvas() {
-  useFrame(({ gl }) => {
-    gl.setScissorTest(false);
-    gl.setClearColor(0x000000, 0);
-    gl.clear(true, true, true);
-  }, -1);
-
-  return null;
+    if (waving || Math.abs(target) >= 0.01 || scroll.velocity || scroll.bend) schedule();
+    else previous = 0;
+  }
+
+  function onLost(event: Event) {
+    event.preventDefault();
+    lost = true;
+    cancelAnimationFrame(frame);
+    frame = 0;
+  }
+  function refresh() {
+    previous = 0;
+    for (const card of cards) card.dirty = true;
+    schedule();
+  }
+  function onRestored() { lost = false; refresh(); }
+  wake = schedule;
+  surface.addEventListener("webglcontextlost", onLost);
+  surface.addEventListener("webglcontextrestored", onRestored);
+  document.addEventListener("visibilitychange", refresh);
+  refresh();
+  return () => {
+    wake = () => {};
+    cancelAnimationFrame(frame);
+    surface.removeEventListener("webglcontextlost", onLost);
+    surface.removeEventListener("webglcontextrestored", onRestored);
+    document.removeEventListener("visibilitychange", refresh);
+    geometry.dispose();
+    material.dispose();
+    renderer.dispose();
+    renderer.forceContextLoss();
+  };
 }
 
 export function ImageEffectsCanvas() {
-  const inline = useInlineCanvas();
-  const { activeView } = useImageLayer();
-
-  const [mounted, setMounted] = useState(false);
-
+  useLenis((lenis) => {
+    scroll.input = -lenis.velocity;
+    scroll.sample = performance.now();
+    wake();
+  });
   useEffect(() => {
-    setMounted(true);
+    try { return startRenderer(); }
+    catch (error) { console.error("Portfolio renderer unavailable", error); }
   }, []);
+  return null;
+}
 
-  if (!mounted || inline) return null;
+export function ShaderImage({ img, mode, isPlaying = false, elevated = false }: Props) {
+  const id = useId();
+  const { activeView, setActiveView } = useImageLayer();
+  const shown = activeView === null || activeView === id;
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const posterRef = useRef<HTMLImageElement>(null);
+  const entry = useRef<Card | null>(null);
 
+  useLayoutEffect(() => {
+    if (!elevated) return;
+    setActiveView(id);
+    return () => setActiveView(current => current === id ? null : current);
+  }, [elevated, id, setActiveView]);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const poster = posterRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !poster || !ctx) return;
+    poster.style.visibility = "visible";
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const card: Card = {
+      canvas, ctx, poster, mode, playing: false, shown: true, near: false, dirty: true,
+      width: canvas.clientWidth, height: canvas.clientHeight,
+      time: 0, wave: 0, bend: 0, fringe: 0,
+    };
+    entry.current = card;
+    cards.add(card);
+
+    const visibility = new IntersectionObserver(([result]) => {
+      card.near = result.isIntersecting;
+      if (card.near) { card.dirty = true; wake(); }
+    }, { rootMargin: PREPAINT_MARGIN + "px" });
+    visibility.observe(canvas);
+
+    const resize = new ResizeObserver(([result]) => {
+      card.width = result.contentRect.width;
+      card.height = result.contentRect.height;
+      card.dirty = true;
+      wake();
+    });
+    resize.observe(canvas);
+
+    let disposed = false;
+    const texture = new THREE.TextureLoader().load(img, loaded => {
+      if (disposed) return;
+      card.texture = loaded;
+      card.dirty = true;
+      wake();
+    }, undefined, error => console.error("Portfolio texture load failed", img, error));
+
+    return () => {
+      disposed = true;
+      resize.disconnect();
+      visibility.disconnect();
+      cards.delete(card);
+      entry.current = null;
+      texture.dispose();
+    };
+  }, [img, mode]);
+
+  useLayoutEffect(() => {
+    if (!entry.current) return;
+    entry.current.shown = shown;
+    entry.current.playing = isPlaying;
+    entry.current.dirty = true;
+    wake();
+  }, [shown, isPlaying, img, mode]);
+
+  const fallbackSize = Math.min(1 / IMAGE_SCALE, FIT_MARGIN) * 100 + "%";
   return (
-    <Canvas
-      dpr={[1, 1.5]}
-      eventSource={document.body}
-      eventPrefix="client"
-      gl={{
-        antialias: false,
-        alpha: true,
-      }}
-      resize={{
-        scroll: false,
-        debounce: {
-          scroll: 0,
-          resize: 0,
-        },
-      }}
-      style={{
-        position: "fixed",
-        inset: 0,
-        width: "100%",
-        height: "100%",
-        pointerEvents: "none",
-        zIndex: activeView === null ? 10 : 3000,
-      }}
-    >
-      <ClearCanvas />
-      <View.Port />
-    </Canvas>
+    <div className="image-canvas" style={{
+      position: "relative", width: "100%", height: "100%", pointerEvents: "none",
+      opacity: shown ? 1 : 0, transition: "opacity 200ms ease",
+    }}>
+      <img ref={posterRef} src={img} alt="" aria-hidden="true" draggable={false}
+        style={{ position: "absolute", inset: 0, margin: "auto", width: fallbackSize,
+          height: fallbackSize, maxWidth: "none", objectFit: "cover", objectPosition: "2% 2%" }} />
+      <canvas ref={canvasRef} aria-hidden="true"
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+    </div>
   );
 }
