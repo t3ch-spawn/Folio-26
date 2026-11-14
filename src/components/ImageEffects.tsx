@@ -159,7 +159,7 @@ function startRenderer() {
 
       const work = card.mode === "work";
       const bend = work ? scroll.bend : 0;
-      const fringe = Math.min(Math.abs(scroll.velocity) * (work ? 0.015 : 0.008), work ? 0.02 : 0.04);
+      const fringe = Math.min(Math.abs(scroll.velocity) * (work ? 0.015 : 0.009), work ? 0.02 : 0.03);
       const oldWave = card.wave;
       const targetWave = work && card.playing ? 0.2 : 0;
       card.wave = THREE.MathUtils.damp(card.wave, targetWave, 4.6, dt);
