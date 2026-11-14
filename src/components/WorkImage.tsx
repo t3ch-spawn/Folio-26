@@ -146,7 +146,7 @@ function ImagePlane({ img, isPlaying }: { img: string; isPlaying: boolean }) {
     // is itself derived from Lenis's own eased scroll position, so we
     // inherit Lenis's easing curve for free instead of reconstructing
     // our own spring from raw scrollY deltas.
-    const v = lenis.velocity;
+    const v = -lenis.velocity;
 
     scrollBendTargetRef.current = THREE.MathUtils.clamp(
       v * BEND_STRENGTH,

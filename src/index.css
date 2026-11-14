@@ -18,13 +18,21 @@ body.active {
   overflow: hidden;
 }
 
+@custom-variant 1200 (@media (max-width: 1200px));
+@custom-variant 1100 (@media (max-width: 1100px));
+@custom-variant 1024 (@media (max-width: 1024px));
+@custom-variant 968 (@media (max-width: 968px));
+@custom-variant 850 (@media (max-width: 850px));
+@custom-variant 768 (@media (max-width: 768px));
+@custom-variant 650 (@media (max-width: 650px));
+
 @layer base {
   .body-h1 {
-    @apply text-[6rem] font-semibold leading-[93%] tracking-[-0.02em];
+    @apply text-[6rem] 1100:text-[4rem] 650:text-[3rem] font-semibold leading-[93%] tracking-[-0.03em];
   }
 
   .body-h2 {
-    @apply text-[5rem] font-semibold leading-[93%] tracking-[-0.02em];
+    @apply text-[5rem] 1024:text-[4rem] 650:text-[2.6rem] font-semibold leading-[93%] tracking-[-0.02em];
   }
 
   .body-2xl {
@@ -53,7 +61,7 @@ body.active {
   }
 
   .tool {
-    @apply scale-[var(--tool-scale)] cursor-pointer;
+    @apply scale-[var(--tool-scale)] 768:scale-[2.3] cursor-pointer;
   }
 }
 
@@ -64,10 +72,6 @@ nav {
 .no-scrollbar {
   scrollbar-width: none;
 }
-
-@custom-variant 1024 (@media (max-width: 1024px));
-@custom-variant 850 (@media (max-width: 850px));
-@custom-variant 768 (@media (max-width: 768px));
 
 .toolPill {
   transition: 0.4s ease-in-out;

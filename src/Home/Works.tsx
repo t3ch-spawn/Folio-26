@@ -13,11 +13,14 @@ gsap.registerPlugin(Flip);
 
 export default function Works() {
   return (
-    <section className="mt-[40vh] px-[40px]">
+    <section
+      id="works"
+      className="mt-[300px] 1024:mt-[130px] px-[40px] 650:px-[16px] scroll-mt-40"
+    >
       <h2 className="body-xl">Selected Works.</h2>
 
       {/* Container for Work cards and details */}
-      <div className="flex flex-col gap-[200px] mt-[90px]">
+      <div className="flex flex-col gap-[200px] 1024:gap-[160px] 650:gap-[100px] mt-[90px] 1024:mt-[40px]">
         {/* Container for One work */}
         {works.map((work) => {
           return <Work {...work} />;
@@ -105,15 +108,17 @@ function Work({ title, siteLink, details, img, summary }: Work) {
   }, [open]);
 
   return (
-    <div className="flex justify-between items-center">
-      <div className="w-full max-w-[590px] flex flex-col gap-[30px]">
-        <h2 className="body-h2 tracking-tight uppercase">{title}</h2>
+    <div className="flex 1024:flex-col-reverse 1024:items-center 1024:gap-[60px] 650:gap-[40px] justify-between items-center">
+      <div className="w-full max-w-[590px] flex flex-col 1024:items-center gap-[30px] 1024:gap-[10px]">
+        <h2 className="body-h2 650:text-center tracking-tight uppercase">
+          {title}
+        </h2>
 
-        <p className="body-lg mt-[20px] max-w-[80%] leading-[120%]">
+        <p className="body-lg 650:text-lg 1024:text-center mt-[20px] max-w-[80%] 768:max-w-full leading-[120%]">
           {summary}
         </p>
 
-        <div className="flex justify-between items-center max-w-[75%]">
+        <div className="flex justify-between items-center max-w-[75%] w-full 1024:mt-[15px]">
           <button
             onClick={() => {
               setOpen(true);
@@ -135,7 +140,7 @@ function Work({ title, siteLink, details, img, summary }: Work) {
           setOpen(true);
           setElevated(true);
         }}
-        className="relative w-full max-w-[500px] max-h-[310px] aspect-[1.3/1.1] cursor-pointer"
+        className="relative w-full max-w-[500px] max-h-[310px] 650:max-h-[200px] aspect-[1.3/1.1] cursor-pointer"
         ref={workImgParent}
       >
         <div
@@ -170,21 +175,21 @@ function Work({ title, siteLink, details, img, summary }: Work) {
 
             {/* Container for content */}
             <ReactLenis className="relative z-[2] flex flex-col justify-center min-h-[100dvh] w-full overflow-y-scroll no-scrollbar">
-              <div className=" flex justify-start gap-[2vw] w-full h-full px-[0px] pt-[100px]">
+              <div className=" flex 1100:flex-col 1100:items-center justify-start gap-[2vw] w-full h-full px-[12px] pt-[100px] 1100:pt-0">
                 {/* Container for expanded image */}
-                <div className="flex flex-col gap-[4vh] min-h-full w-full max-w-[900px] pb-[70px]">
+                <div className="flex flex-col  gap-[4vh] min-h-full 1100:min-h-auto w-full max-w-[900px] 1200:max-w-[500px] 1100:max-w-[700px] pb-[70px] 1100:pb-0">
                   <div
                     ref={expandedWorkCont}
-                    className="relative w-full min-h-[500px] max-h-[500px]"
+                    className="relative w-full h-[500px] 1200:h-[340px] 1100:h-[400px] 650:h-[200px] my-auto"
                   ></div>
                   {/* <div className="relative w-full border !h-[500px] p-[2vw]"></div>
                   <div className="relative w-full border !h-[500px] p-[2vw]"></div> */}
                 </div>
 
                 {/* Container for details about work */}
-                <div className="flex flex-col w-full gap-[10px] h-full pt-[40px] relative z-[10]">
-                  <div className="flex justify-between max-w-[600px]">
-                    <h3 className="text-5xl font-medium tracking-tight uppercase ml-[6vw]">
+                <div className="flex flex-col 1100:mx-auto max-w-[600px] 1100:max-w-[680px] w-full gap-[10px] h-full pt-[40px] relative z-[10]">
+                  <div className="flex justify-between">
+                    <h3 className="text-5xl 650:text-4xl font-medium tracking-tight uppercase ml-[6vw]">
                       {title}
                     </h3>
 
@@ -198,14 +203,14 @@ function Work({ title, siteLink, details, img, summary }: Work) {
                     </a>
                   </div>
 
-                  <div className="max-w-[600px] w-full  flex flex-col gap-[40px] mt-[50px]">
+                  <div className="max-w-[600px] w-full  flex flex-col 768:gap-[20px] gap-[40px] mt-[50px] 768:mt-[30px]">
                     {details.map(({ title, value }) => {
                       return (
                         <div className="flex items-start gap-[3vw]">
-                          <p className="font-medium  leading-[100%] min-w-[50px]">
+                          <p className="font-medium 650:text-sm leading-[100%] min-w-[50px]">
                             {title}
                           </p>
-                          <p className="text-[1.3rem] leading-[120%] font-medium">
+                          <p className="text-[1.3rem] 768:text-base leading-[120%] font-medium">
                             {value}
                           </p>
                         </div>

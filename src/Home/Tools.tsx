@@ -27,20 +27,17 @@ const DEFAULT_TOOL_SCALE = 3;
 
 interface ToolDef {
   content: ReactElement;
-  top: number; // base position, % of container height — single source of truth
-  left: number; // base position, % of container width
-  scale?: number; // visual scale of the icon only (the pill is never scaled)
+  top: number;
+  left: number;
+  scale?: number;
   className?: string;
   toolName: string;
 }
 
-// Everything the physics sync needs for one tool, built once on mount.
-// Only tools whose element actually rendered end up in here, so loops over
-// it never need null checks.
 interface ToolItem {
   el: HTMLDivElement;
   body: Matter.Body;
-  origin: { x: number; y: number }; // container-relative center, px
+  origin: { x: number; y: number };
 }
 
 const TOOL_DEFS: ToolDef[] = [
@@ -50,6 +47,7 @@ const TOOL_DEFS: ToolDef[] = [
     content: <RiTailwindCssFill />,
     top: 23,
     left: 10,
+    className: "650:!left-[16%] 650:!top-[30%]",
   },
   { toolName: "Next.js", content: <RiNextjsLine />, top: 76, left: 90 },
   { toolName: "Typescript", content: <SiTypescript />, top: 80, left: 52 },
@@ -72,7 +70,8 @@ const TOOL_DEFS: ToolDef[] = [
     top: 15,
     left: 33,
     scale: 1,
-    className: "font-bold text-2xl leading-[100%] cursor-pointer",
+    className:
+      "font-bold text-2xl 768:text-[12px] leading-[100%] cursor-pointer",
   },
 ];
 
@@ -81,16 +80,16 @@ export default function Tools() {
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const itemsRef = useRef<ToolItem[]>([]);
 
-  // Lazy initial state: created once, never null, so no `if (!engine)` guards.
   const [engine] = useState(() => Matter.Engine.create());
 
-  const mouseConstraintRef = useRef<Matter.MouseConstraint | null>(null);
   const syncPositionsRef = useRef<() => void>(() => {});
+  const releaseDragRef = useRef<() => void>(() => {});
+  const gravityEnabledRef = useRef(false);
+  const animatingRef = useRef(false);
+  const frameRef = useRef<number | null>(null);
+  const resetTimelineRef = useRef<gsap.core.Timeline | null>(null);
 
   const [gravityOn, setGravityOn] = useState(false);
-  // Kept separate from gravityOn on purpose — this is what actually drives
-  // <Bobber disableBobbing>, and it's flipped a beat before/after gravityOn
-  // so bobbing and physics never both own the transform at the same time.
   const [bobbingEnabled, setBobbingEnabled] = useState(true);
   const [isAnimating, setIsAnimating] = useState(false);
 
@@ -98,87 +97,192 @@ export default function Tools() {
     const container = containerRef.current;
     if (!container) return;
 
-    engine.gravity.y = 0; // starts off; toggled via the button
+    engine.gravity.y = 0;
 
     const width = container.clientWidth;
     const height = container.clientHeight;
     const containerRect = container.getBoundingClientRect();
 
+    // Account for the container's border when measuring body positions.
+    const contentLeft = containerRect.left + container.clientLeft;
+    const contentTop = containerRect.top + container.clientTop;
+
     const wallThickness = 80;
+
     const walls = [
+      // Floor
       Matter.Bodies.rectangle(
         width / 2,
         height + wallThickness / 2,
         width + wallThickness * 2,
         wallThickness,
         { isStatic: true },
-      ), // floor
+      ),
+      // Ceiling
       Matter.Bodies.rectangle(
         width / 2,
         -wallThickness / 2,
         width + wallThickness * 2,
         wallThickness,
         { isStatic: true },
-      ), // ceiling
+      ),
+      // Left wall
       Matter.Bodies.rectangle(
         -wallThickness / 2,
         height / 2,
         wallThickness,
         height + wallThickness * 2,
         { isStatic: true },
-      ), // left
+      ),
+      // Right wall
       Matter.Bodies.rectangle(
         width + wallThickness / 2,
         height / 2,
         wallThickness,
         height + wallThickness * 2,
         { isStatic: true },
-      ), // right
+      ),
     ];
 
     const items: ToolItem[] = [];
-    itemRefs.current.forEach((el) => {
-      if (!el) return;
 
-      // Center: the outer div's layout box. CSS scale and bobbing only
-      // move the Bobber inside it, so this is stable and sits at the same
-      // center as the scaled icon.
+    itemRefs.current.forEach((el) => {
+      if (!el || !el.children[0]) return;
+
       const rect = el.getBoundingClientRect();
-      // Size: the Bobber's *painted* box (children[0]). getBoundingClientRect
-      // includes the CSS scale, so the body matches what you actually see
-      // instead of the smaller unscaled layout box.
       const painted = el.children[0].getBoundingClientRect();
 
       const origin = {
-        x: rect.left - containerRect.left + rect.width / 2,
-        y: rect.top - containerRect.top + rect.height / 2,
+        x: rect.left - contentLeft + rect.width / 2,
+        y: rect.top - contentTop + rect.height / 2,
       };
+
       const body = Matter.Bodies.rectangle(
         origin.x,
         origin.y,
         painted.width,
         painted.height,
-        { restitution: 0.55, friction: 0.15, frictionAir: 0.012 },
+        {
+          restitution: 0.55,
+          friction: 0.15,
+          frictionAir: 0.012,
+        },
       );
+
       items.push({ el, body, origin });
     });
+
     itemsRef.current = items;
 
-    Matter.World.add(engine.world, [...walls, ...items.map((i) => i.body)]);
+    Matter.World.add(engine.world, [
+      ...walls,
+      ...items.map((item) => item.body),
+    ]);
 
-    const mouse = Matter.Mouse.create(container);
-    const mouseConstraint = Matter.MouseConstraint.create(engine, {
-      mouse,
-      constraint: { stiffness: 0.2, render: { visible: false } },
+    // A regular constraint replaces Matter.MouseConstraint.
+    // No Matter mouse/touch/wheel listeners are installed.
+    const dragConstraint = Matter.Constraint.create({
+      pointA: { x: 0, y: 0 },
+      pointB: { x: 0, y: 0 },
+      length: 0,
+      stiffness: 0.2,
+      damping: 0.1,
+      render: { visible: false },
     });
-    mouseConstraintRef.current = mouseConstraint;
-    // not added to the world yet — dragging only kicks in once physics is live
+
+    Matter.World.add(engine.world, dragConstraint);
+
+    let activePointerId: number | null = null;
+
+    const getPointerPosition = (event: PointerEvent) => {
+      const rect = container.getBoundingClientRect();
+
+      return {
+        x: event.clientX - rect.left - container.clientLeft,
+        y: event.clientY - rect.top - container.clientTop,
+      };
+    };
+
+    const releaseDrag = () => {
+      const pointerId = activePointerId;
+      activePointerId = null;
+
+      dragConstraint.bodyB = null;
+      dragConstraint.pointB = { x: 0, y: 0 };
+
+      if (pointerId !== null && container.hasPointerCapture(pointerId)) {
+        container.releasePointerCapture(pointerId);
+      }
+    };
+
+    releaseDragRef.current = releaseDrag;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!gravityEnabledRef.current) return;
+      if (activePointerId !== null || !event.isPrimary) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+
+      const position = getPointerPosition(event);
+
+      const hits = Matter.Query.point(
+        items.map((item) => item.body),
+        position,
+      );
+
+      const body = hits[hits.length - 1];
+      if (!body) return;
+
+      activePointerId = event.pointerId;
+
+      dragConstraint.pointA.x = position.x;
+      dragConstraint.pointA.y = position.y;
+
+      // Matter's constraint anchor is relative to the body's center,
+      // in its current orientation.
+      dragConstraint.pointB = {
+        x: position.x - body.position.x,
+        y: position.y - body.position.y,
+      };
+
+      // @ts-ignore
+      dragConstraint.angleB = body.angle;
+      dragConstraint.bodyB = body;
+
+      Matter.Sleeping.set(body, false);
+
+      // Pointer capture keeps mouse dragging reliable outside the box.
+      // Touch gestures remain subject to native pan-y scrolling.
+      container.setPointerCapture(event.pointerId);
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (event.pointerId !== activePointerId) return;
+
+      const position = getPointerPosition(event);
+
+      dragConstraint.pointA.x = position.x;
+      dragConstraint.pointA.y = position.y;
+    };
+
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (event.pointerId !== activePointerId) return;
+      releaseDrag();
+    };
+
+    container.addEventListener("pointerdown", handlePointerDown);
+    container.addEventListener("pointermove", handlePointerMove);
+    container.addEventListener("pointerup", handlePointerEnd);
+
+    // When a vertical swipe becomes page scrolling, release the icon.
+    container.addEventListener("pointercancel", handlePointerEnd);
+    container.addEventListener("lostpointercapture", handlePointerEnd);
+    window.addEventListener("blur", releaseDrag);
 
     const runner = Matter.Runner.create();
     Matter.Runner.run(runner, engine);
 
     const syncPositions = () => {
-      itemsRef.current.forEach(({ el, body, origin }) => {
+      items.forEach(({ el, body, origin }) => {
         gsap.set(el, {
           x: body.position.x - origin.x,
           y: body.position.y - origin.y,
@@ -186,14 +290,42 @@ export default function Tools() {
         });
       });
     };
+
     syncPositionsRef.current = syncPositions;
 
     return () => {
+      gravityEnabledRef.current = false;
+
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+
+      resetTimelineRef.current?.kill();
+      resetTimelineRef.current = null;
+
+      releaseDrag();
+
+      container.removeEventListener("pointerdown", handlePointerDown);
+      container.removeEventListener("pointermove", handlePointerMove);
+      container.removeEventListener("pointerup", handlePointerEnd);
+      container.removeEventListener("pointercancel", handlePointerEnd);
+      container.removeEventListener("lostpointercapture", handlePointerEnd);
+
+      window.removeEventListener("blur", releaseDrag);
+
       Matter.Events.off(engine, "afterUpdate", syncPositions);
-      Matter.World.remove(engine.world, mouseConstraint);
       Matter.Runner.stop(runner);
       Matter.World.clear(engine.world, false);
       Matter.Engine.clear(engine);
+
+      items.forEach(({ el }) => {
+        gsap.set(el, { x: 0, y: 0, rotation: 0 });
+      });
+
+      itemsRef.current = [];
+      releaseDragRef.current = () => {};
+      syncPositionsRef.current = () => {};
     };
   }, [engine]);
 
@@ -207,78 +339,89 @@ export default function Tools() {
   };
 
   const turnGravityOn = () => {
+    animatingRef.current = true;
     setIsAnimating(true);
-
-    // 1. bobbing off first (Bobber's own cleanup effect kills its tween
-    // and zeroes its transform), *then* physics takes over — never both
-    // driving a transform at once.
     setBobbingEnabled(false);
 
-    requestAnimationFrame(() => {
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+
       resetBodies();
 
-      // 2. only now hand the outer boxes' transform over to physics
       Matter.Events.on(engine, "afterUpdate", syncPositionsRef.current);
-      if (mouseConstraintRef.current) {
-        Matter.World.add(engine.world, mouseConstraintRef.current);
-      }
+
       engine.gravity.y = 1;
+      gravityEnabledRef.current = true;
 
       setGravityOn(true);
+      animatingRef.current = false;
       setIsAnimating(false);
     });
   };
 
   const turnGravityOff = () => {
+    animatingRef.current = true;
     setIsAnimating(true);
 
-    // 1. stop physics from driving the transform
+    gravityEnabledRef.current = false;
+    releaseDragRef.current();
+
     engine.gravity.y = 0;
+
     Matter.Events.off(engine, "afterUpdate", syncPositionsRef.current);
-    if (mouseConstraintRef.current) {
-      Matter.World.remove(engine.world, mouseConstraintRef.current);
-    }
+
     setGravityOn(false);
 
-    // 2. tween every box back to its original position
-    const tl = gsap.timeline({
+    const timeline = gsap.timeline({
       onComplete: () => {
         resetBodies();
-        // 3. only once everyone's home does bobbing resume
         setBobbingEnabled(true);
+        animatingRef.current = false;
         setIsAnimating(false);
+        resetTimelineRef.current = null;
       },
     });
 
+    resetTimelineRef.current = timeline;
+
     itemsRef.current.forEach(({ el }) => {
-      tl.to(
+      timeline.to(
         el,
-        { x: 0, y: 0, rotation: 0, duration: 0.8, ease: "power2.out" },
+        {
+          x: 0,
+          y: 0,
+          rotation: 0,
+          duration: 0.8,
+          ease: "power2.out",
+        },
         0,
       );
     });
   };
 
   const toggleGravity = () => {
-    if (isAnimating) return;
+    if (animatingRef.current) return;
+
     gravityOn ? turnGravityOff() : turnGravityOn();
   };
 
   function clearPills() {
-    document
-      .querySelectorAll(".toolPill")
+    containerRef.current
+      ?.querySelectorAll(".toolPill")
       .forEach((pill) => pill.classList.remove("active"));
   }
 
-  function revealPill(e: MouseEvent<HTMLDivElement>) {
+  function revealPill(event: MouseEvent<HTMLDivElement>) {
     clearPills();
-    e.currentTarget.querySelector(".toolPill")?.classList.add("active");
+
+    event.currentTarget.querySelector(".toolPill")?.classList.add("active");
   }
 
   return (
-    <section className="flex flex-col items-center justify-center mt-[25vh]">
+    <section className="flex flex-col items-center justify-center mt-[200px] 768:mt-[140px] px-[16px]">
       <div className="flex w-full justify-between max-w-[700px] items-center gap-4">
         <h2 className="body-xl">Tools I use</h2>
+
         <button
           onClick={toggleGravity}
           disabled={isAnimating}
@@ -288,21 +431,17 @@ export default function Tools() {
         </button>
       </div>
 
-      {/* Box of icons */}
       <div
         ref={containerRef}
-        className="border-white/40 relative overflow-hidden border-2 rounded-3xl mt-[20px] w-full max-w-[700px] h-[370px]"
+        className="border-white/40 relative overflow-hidden border-2 rounded-3xl mt-[20px] w-full max-w-[700px] h-[370px] select-none"
+        style={{ touchAction: "pan-y pinch-zoom" }}
       >
-        {TOOL_DEFS.map((def, i) => (
+        {TOOL_DEFS.map((def, index) => (
           <div
             key={def.toolName}
             ref={(el) => {
-              itemRefs.current[i] = el;
+              itemRefs.current[index] = el;
             }}
-            // Outer div: positioned, measured by Matter, moved by physics.
-            // It stays unscaled and shrink-wraps the Bobber. The scale is
-            // exposed as a CSS variable so `.tool` (on the Bobber) can use
-            // it and the pill can position itself against the scaled edge.
             className={def.className}
             style={
               {
@@ -310,6 +449,7 @@ export default function Tools() {
                 top: `${def.top}%`,
                 left: `${def.left}%`,
                 "--tool-scale": def.scale ?? DEFAULT_TOOL_SCALE,
+                touchAction: "pan-y pinch-zoom",
               } as CSSProperties
             }
             onMouseEnter={revealPill}
@@ -325,9 +465,13 @@ export default function Tools() {
       </div>
 
       <div
-        className={` mt-[30px] duration-[500ms] ${gravityOn ? "opacity-100 translate-y-0" : "opacity-0 translate-y-[-30px]"} `}
+        className={`mt-[30px] duration-[500ms] ${
+          gravityOn
+            ? "opacity-100 translate-y-0"
+            : "opacity-0 translate-y-[-30px]"
+        }`}
       >
-        Flick the icons around :)
+        Drag sideways to flick the icons :)
       </div>
     </section>
   );
@@ -345,18 +489,6 @@ export type BobberProps = {
   speed?: [number, number];
 };
 
-/**
- * Bobber
- * Wraps `children` in a div and gently animates that div's x/y in a
- * random, yoyo-ing pattern, so the content stays where it was placed but
- * drifts slightly. When `disableBobbing` flips true, the effect's cleanup
- * kills the tween and resets x/y to 0 — so toggling the prop is enough to
- * cleanly start/stop bobbing from outside (used by Tools' gravity toggle
- * to sequence "stop bobbing" strictly before "start physics").
- *
- * Don't put `absolute` on it: the parent's size is measured from this
- * element being in flow.
- */
 function Bobber({
   children,
   className,
@@ -388,15 +520,16 @@ function Bobber({
   }, [disableBobbing, intensity, minSpeed, maxSpeed]);
 
   return (
-    <div ref={ref} className={className}>
+    <div
+      ref={ref}
+      className={className}
+      style={{ touchAction: "pan-y pinch-zoom" }}
+    >
       {children}
     </div>
   );
 }
 
-// Pill anchored to a top corner of the *scaled* icon. Offsets are
-// percentages of the outer (unscaled) box, so 50% - 50% * scale is exactly
-// where the scaled box's edge lands. The pill itself is never scaled.
 const SCALED_EDGE = "calc(50% - 10% * var(--tool-scale, 1))";
 
 function ToolPill({
@@ -408,8 +541,12 @@ function ToolPill({
 }) {
   return (
     <div
-      className="pointer-events-none absolute z-10 whitespace-nowrap rounded-full bg-white text-[18px] px-2 flex justify-center text-black toolPill opacity-0 !font-normal"
-      style={{ top: SCALED_EDGE, [side]: SCALED_EDGE, marginTop: -12 }}
+      className="pointer-events-none absolute z-10 whitespace-nowrap rounded-full bg-white text-[18px] 650:text-[13px] px-2 650:py-[2px] 650:mr-3 flex justify-center text-black toolPill opacity-0 !font-normal"
+      style={{
+        top: SCALED_EDGE,
+        [side]: SCALED_EDGE,
+        marginTop: -12,
+      }}
     >
       {name}
     </div>

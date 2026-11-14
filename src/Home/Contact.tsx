@@ -16,7 +16,7 @@ const socials: { icon: ReactElement; link: string }[] = [
 
 export default function Contact() {
   return (
-    <section className="mt-[45vh] flex flex-col pb-[300px]">
+    <section id="contact" className="mt-[45vh] flex flex-col pb-[300px] scroll-mt-20">
       <div className="flex flex-col justify-center items-center">
         <h2 className="text-5xl font-bold mx-auto uppercase">Get In Touch.</h2>
         <p className="mt-[15px] text-xl leading-[110%] max-w-[550px] text-center">

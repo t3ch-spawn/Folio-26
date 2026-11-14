@@ -19,7 +19,7 @@ export default function Home() {
       <About />
       <Tools />
       <Works />
-      <Contact />
+      {/* <Contact /> */}
     </main>
   );
 }
