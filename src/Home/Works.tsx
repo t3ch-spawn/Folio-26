@@ -88,7 +88,10 @@ function Work({ title, siteLink, details, img, summary }: Work) {
 
         // Transition has actually finished — stop the wave.
         setWaveActive(false);
-        setElevated(false);
+
+        setTimeout(() => {
+          setElevated(false);
+        }, 500);
       },
     });
   }
@@ -145,12 +148,14 @@ function Work({ title, siteLink, details, img, summary }: Work) {
       >
         <div
           ref={workImgCont}
-          className={`" aspect-[1.3/1] w-full h-full origin-center relative object-cover ${elevated ? "!z-[300]" : "!z-[1]"}`}
+          className={`aspect-[1.3/1] w-full h-full origin-center relative object-cover ${
+            elevated ? "!z-[3000]" : "!z-[1]"
+          }`}
         >
           <WorkImage
             img={`/images/${img}.png`}
             isPlaying={waveActive}
-            onPlayingChange={setWaveActive}
+            elevated={elevated}
           />
         </div>
       </div>

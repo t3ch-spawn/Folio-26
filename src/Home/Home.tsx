@@ -7,6 +7,7 @@ import About from "./About";
 import Tools from "./Tools";
 import Works from "./Works";
 import Contact from "./Contact";
+import { ImageEffectsCanvas } from "../components/ImageEffects";
 
 export default function Home() {
   gsap.registerPlugin(ScrollTrigger);
@@ -20,6 +21,7 @@ export default function Home() {
       <Tools />
       <Works />
       <Contact />
+      <ImageEffectsCanvas />
     </main>
   );
 }
