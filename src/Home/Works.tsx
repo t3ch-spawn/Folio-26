@@ -15,7 +15,7 @@ export default function Works() {
   return (
     <section
       id="works"
-      className="mt-[300px] 1024:mt-[130px] px-[40px] 650:px-[16px] scroll-mt-40"
+      className="mt-[200px] 1024:mt-[130px] px-[40px] 650:px-[16px] scroll-mt-40"
     >
       <h2 className="body-xl">Selected Works.</h2>
 
