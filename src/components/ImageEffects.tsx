@@ -3,15 +3,15 @@ import { useLenis } from "lenis/react";
 import * as THREE from "three";
 import { useImageLayer } from "./ImageLayerContext";
 
-const BEND_STRENGTH = 0.0045;
+const BEND_STRENGTH = 0.0035;
 const BEND_CENTERING = 0.35; // 0 = anchored middle, 0.5 = evenly distributed bend
 const MAX_BEND = 0.4;
-const BEND_SMOOTHING = 6;
+const BEND_SMOOTHING = 8;
 const MAX_DPR = 2;
 const IMAGE_SCALE = 1.086;
-const BEND_SHRINK = 0.24; // 0 = none, 1 = full fit, 2+ = stronger
+const BEND_SHRINK = 0.5; // 0 = none, 1 = full fit, 2+ = stronger
 const FIT_MARGIN = 0.96;
-const PREPAINT_MARGIN = 80;
+const PREPAINT_MARGIN = 180;
 
 type Mode = "work" | "aberration";
 interface Props {
@@ -159,7 +159,7 @@ function startRenderer() {
 
       const work = card.mode === "work";
       const bend = work ? scroll.bend : 0;
-      const fringe = Math.min(Math.abs(scroll.velocity) * (work ? 0.015 : 0.009), work ? 0.02 : 0.024);
+      const fringe = Math.min(Math.abs(scroll.velocity) * (work ? 0.015 : 0.002), work ? 0.02 : 0.02);
       const oldWave = card.wave;
       const targetWave = work && card.playing ? 0.2 : 0;
       card.wave = THREE.MathUtils.damp(card.wave, targetWave, 4.6, dt);
