@@ -228,7 +228,7 @@ function Work({ title, siteLink, details, img, summary }: Work) {
                 onClick={() => {
                   setOpen(false);
                 }}
-                className="absolute inset-0 w-full h-full bg-black/80"
+                className="absolute inset-0 w-full h-full bg-black/90"
               ></div>
             </ReactLenis>
           </motion.div>

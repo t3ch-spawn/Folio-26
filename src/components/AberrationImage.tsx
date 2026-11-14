@@ -180,8 +180,9 @@ export default function AberrationImage({ img }: { img: string }) {
   return (
     <Canvas
       className="image-canvas !overflow-visible"
-      dpr={2}
+      dpr={[1, 1.8]}
       camera={{ position: [0, 0, 1.3] }}
+      gl={{ antialias: false }}
       resize={{ scroll: false, debounce: { scroll: 0, resize: 0 } }}
     >
       <ImagePlane img={img} />
