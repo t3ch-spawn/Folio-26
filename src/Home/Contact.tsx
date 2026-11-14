@@ -16,10 +16,10 @@ const socials: { icon: ReactElement; link: string }[] = [
 
 export default function Contact() {
   return (
-    <section id="contact" className="mt-[45vh] flex flex-col pb-[300px] scroll-mt-20">
+    <section id="contact" className="mt-[370px] 1024:mt-[300px] flex flex-col pb-[300px] px-[16px] scroll-mt-20">
       <div className="flex flex-col justify-center items-center">
-        <h2 className="text-5xl font-bold mx-auto uppercase">Get In Touch.</h2>
-        <p className="mt-[15px] text-xl leading-[110%] max-w-[550px] text-center">
+        <h2 className="text-5xl 1024:text-[2.7rem] font-bold mx-auto uppercase">Get In Touch.</h2>
+        <p className="mt-[15px] text-xl 1024:text-lg leading-[110%] max-w-[550px] text-center">
           Open for creative development projects, interactive experiences and
           collaborations
         </p>
@@ -29,7 +29,7 @@ export default function Contact() {
       <div className="mt-[40px] flex justify-center items-center gap-[30px]">
         {socials.map(({ icon, link }) => {
           return (
-            <a className="text-[40px]" href={link}>
+            <a className="text-[40px] 650:text-[35px]" href={link}>
               {icon}
             </a>
           );
