@@ -88,10 +88,6 @@ function Work({ title, siteLink, details, img, summary }: Work) {
 
         // Transition has actually finished — stop the wave.
         setWaveActive(false);
-
-        setTimeout(() => {
-          setElevated(false);
-        }, 500);
       },
     });
   }
@@ -107,6 +103,9 @@ function Work({ title, siteLink, details, img, summary }: Work) {
       enableLenis();
       setWaveActive(true);
       revertWorkImg();
+      setTimeout(() => {
+        setElevated(false);
+      }, 200);
     }
   }, [open]);
 

@@ -8,20 +8,23 @@ import Tools from "./Tools";
 import Works from "./Works";
 import Contact from "./Contact";
 import { ImageEffectsCanvas } from "../components/ImageEffects";
+import { ImageLayerProvider } from "../components/ImageLayerContext";
 
 export default function Home() {
   gsap.registerPlugin(ScrollTrigger);
 
   return (
     <main className="relative gray-shader-cont">
-      <ShaderBackgroundGray />
-      <Navbar />
-      <Hero />
-      <About />
-      <Tools />
-      <Works />
-      <Contact />
-      <ImageEffectsCanvas />
+      <ImageLayerProvider>
+        <ShaderBackgroundGray />
+        <Navbar />
+        <Hero />
+        <About />
+        <Tools />
+        <Works />
+        <Contact />
+        <ImageEffectsCanvas />
+      </ImageLayerProvider>
     </main>
   );
 }

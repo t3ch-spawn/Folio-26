@@ -1,4 +1,13 @@
-import { Suspense, useEffect, useRef, useState } from "react";
+import {
+  Suspense,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+
+import { useImageLayer } from "./ImageLayerContext";
 import {
   Canvas,
   extend,
@@ -44,6 +53,7 @@ const fragmentShader = /* glsl */ `
   uniform float uImageAspect;
   uniform float uPlaneAspect;
   uniform float uAberration;
+  uniform float uOpacity;
 
   void main() {
     vec2 ratio = vec2(
@@ -68,6 +78,8 @@ const fragmentShader = /* glsl */ `
 
       gl_FragColor = vec4(r, g, b, 1.0);
     }
+
+    gl_FragColor.a *= uOpacity;
   }
 `;
 
@@ -80,6 +92,7 @@ const PortfolioImageMaterial = shaderMaterial(
     uAberration: 0,
     uImageAspect: 1,
     uPlaneAspect: 1,
+    uOpacity: 1,
   },
   vertexShader,
   fragmentShader,
@@ -101,12 +114,19 @@ interface ImageSceneProps {
   mode: ImageMode;
   isPlaying: boolean;
   container: React.RefObject<HTMLDivElement | null>;
+  opacity: number;
 }
 
 const PLANE_WIDTH = 4;
 const PLANE_HEIGHT = 3;
 
-function ImageScene({ img, mode, isPlaying, container }: ImageSceneProps) {
+function ImageScene({
+  img,
+  mode,
+  isPlaying,
+  container,
+  opacity,
+}: ImageSceneProps) {
   const image = useLoader(THREE.TextureLoader, img);
 
   const meshRef = useRef<THREE.Mesh>(null);
@@ -181,8 +201,17 @@ function ImageScene({ img, mode, isPlaying, container }: ImageSceneProps) {
     const mesh = meshRef.current;
     const material = materialRef.current;
 
-    if (!mesh || !material || !visibleRef.current) return;
+    if (!mesh || !material) return;
 
+    // Fade even when the rest of this scene's updates are skipped.
+    material.uOpacity = THREE.MathUtils.damp(
+      material.uOpacity,
+      opacity,
+      10,
+      Math.min(delta, 0.05),
+    );
+
+    if (!visibleRef.current) return;
     const dt = Math.min(delta, 0.05);
 
     if (isWork && isPlaying) {
@@ -273,6 +302,7 @@ function ImageScene({ img, mode, isPlaying, container }: ImageSceneProps) {
         ref={materialRef}
         uTexture={image}
         uImageAspect={imageAspect}
+        transparent
         depthTest={false}
         depthWrite={false}
       />
@@ -294,9 +324,22 @@ export function ShaderImage({
   elevated = false,
 }: ShaderImageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const viewId = useId();
+
+  const { activeView, setActiveView } = useImageLayer();
   const isWork = mode === "work";
 
-  const cameraPosition: [number, number, number] = [0, 0, isWork ? 3.3 : 1.3];
+  useLayoutEffect(() => {
+    if (!elevated) return;
+
+    setActiveView(viewId);
+
+    return () => {
+      setActiveView((current) => (current === viewId ? null : current));
+    };
+  }, [elevated, viewId, setActiveView]);
+
+  const opacity = activeView === null || activeView === viewId ? 1 : 0;
 
   return (
     <div
@@ -309,9 +352,7 @@ export function ShaderImage({
         pointerEvents: "none",
       }}
     >
-      {/* Normal images render through the shared background Canvas. */}
       <View
-        visible={!elevated}
         style={{
           position: "absolute",
           inset: 0,
@@ -320,71 +361,43 @@ export function ShaderImage({
           pointerEvents: "none",
         }}
       >
-        {!elevated && (
-          <>
-            <PerspectiveCamera
-              makeDefault
-              position={cameraPosition}
-              zoom={isWork ? 0.98 : 1}
-              fov={75}
-            />
+        <PerspectiveCamera
+          makeDefault
+          position={[0, 0, isWork ? 3.3 : 1.3]}
+          zoom={isWork ? 0.98 : 1}
+          fov={75}
+        />
 
-            <Suspense fallback={null}>
-              <ImageScene
-                key={img}
-                img={img}
-                mode={mode}
-                isPlaying={isPlaying}
-                container={containerRef}
-              />
-            </Suspense>
-          </>
-        )}
+        <Suspense fallback={null}>
+          <ImageScene
+            key={img}
+            img={img}
+            mode={mode}
+            isPlaying={isPlaying}
+            container={containerRef}
+            opacity={opacity}
+          />
+        </Suspense>
       </View>
-
-      {/* Only the selected image gets a local Canvas.
-          It follows the wrapper's DOM position and CSS z-index. */}
-      {elevated && (
-        <Canvas
-          dpr={[1, 1.5]}
-          camera={{
-            position: cameraPosition,
-            zoom: isWork ? 0.98 : 1,
-            fov: 75,
-          }}
-          gl={{
-            antialias: false,
-            alpha: true,
-          }}
-          resize={{
-            scroll: false,
-            debounce: { scroll: 0, resize: 0 },
-          }}
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            pointerEvents: "none",
-          }}
-        >
-          <Suspense fallback={null}>
-            <ImageScene
-              key={img}
-              img={img}
-              mode={mode}
-              isPlaying={isPlaying}
-              container={containerRef}
-            />
-          </Suspense>
-        </Canvas>
-      )}
     </div>
   );
 }
 
 // Mount exactly once, at your application root.
+function ClearCanvas() {
+  useFrame(({ gl }) => {
+    // Clear the whole buffer before View renders its individual regions.
+    // This prevents hidden or moving views leaving stale pixels.
+    gl.setScissorTest(false);
+    gl.setClearColor(0x000000, 0);
+    gl.clear(true, true, true);
+  }, -1);
+
+  return null;
+}
+
 export function ImageEffectsCanvas() {
+  const { activeView } = useImageLayer();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -408,9 +421,10 @@ export function ImageEffectsCanvas() {
         width: "100%",
         height: "100%",
         pointerEvents: "none",
-        zIndex: 10,
+        zIndex: activeView === null ? 10 : 3000,
       }}
     >
+      <ClearCanvas />
       <View.Port />
     </Canvas>
   );
