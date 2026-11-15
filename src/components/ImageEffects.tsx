@@ -3,7 +3,7 @@ import { useLenis } from "lenis/react";
 import * as THREE from "three";
 import { useImageLayer } from "./ImageLayerContext";
 
-const BEND_STRENGTH = 0.0035;
+const BEND_STRENGTH = 0.0030;
 const BEND_CENTERING = 0.35; // 0 = anchored middle, 0.5 = evenly distributed bend
 const MAX_BEND = 0.4;
 const BEND_SMOOTHING = 8;
@@ -25,6 +25,8 @@ interface Card {
   ctx: CanvasRenderingContext2D;
   poster: HTMLImageElement;
   texture?: THREE.Texture;
+  snapshot?: ImageData;
+  pixels?: Uint8Array;
   mode: Mode;
   playing: boolean;
   shown: boolean;
@@ -112,15 +114,74 @@ function startRenderer() {
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false });
   renderer.setClearColor(0, 0);
   renderer.setScissorTest(true);
+  const gl = renderer.getContext();
+  let row = new Uint8Array(0);
+
+  function copyFrame(card: Card, width: number, height: number) {
+    if (gl.isContextLost()) return false;
+
+    if (
+      !card.snapshot ||
+      card.snapshot.width !== width ||
+      card.snapshot.height !== height
+    ) {
+      card.snapshot = card.ctx.createImageData(width, height);
+      card.pixels = new Uint8Array(card.snapshot.data.buffer);
+    }
+    const pixels = card.pixels!;
+
+    // Snapshot this card before the shared framebuffer is reused. In WebKit,
+    // drawImage(renderer.domElement, ...) can pick up a later card's contents.
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    if (gl.isContextLost()) return false;
+
+    // WebGL starts at the bottom left; ImageData starts at the top left.
+    const stride = width * 4;
+    if (row.length < stride) row = new Uint8Array(stride);
+    const currentRow = row.subarray(0, stride);
+    for (let y = 0; y < Math.floor(height / 2); y++) {
+      const top = y * stride;
+      const bottom = (height - 1 - y) * stride;
+      currentRow.set(pixels.subarray(top, top + stride));
+      pixels.copyWithin(top, bottom, bottom + stride);
+      pixels.set(currentRow, bottom);
+    }
+
+    // The transparent WebGL framebuffer holds premultiplied RGB. ImageData
+    // expects straight alpha, including when the source image is translucent.
+    const data = card.snapshot.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const alpha = data[i + 3];
+      if (alpha > 0 && alpha < 255) {
+        const scale = 255 / alpha;
+        data[i] *= scale;
+        data[i + 1] *= scale;
+        data[i + 2] *= scale;
+      }
+    }
+
+    // Upload owned bytes instead of passing a live, mutable WebGL canvas.
+    // This also replaces transparent pixels left by the previous bend/wave.
+    card.ctx.putImageData(card.snapshot, 0, 0);
+    return true;
+  }
 
   const uniforms = {
     uTexture: { value: null as THREE.Texture | null },
-    uImageAspect: { value: 1 }, uPlaneAspect: { value: 1 },
-    uTime: { value: 0 }, uCurves: { value: 0 }, uScrollBend: { value: 0 },
-    uAberration: { value: 0 }, uFit: { value: 1 },
+    uImageAspect: { value: 1 },
+    uPlaneAspect: { value: 1 },
+    uTime: { value: 0 },
+    uCurves: { value: 0 },
+    uScrollBend: { value: 0 },
+    uAberration: { value: 0 },
+    uFit: { value: 1 },
   };
   const material = new THREE.ShaderMaterial({
-    uniforms, vertexShader, fragmentShader, depthTest: false, depthWrite: false,
+    uniforms,
+    vertexShader,
+    fragmentShader,
+    depthTest: false,
+    depthWrite: false,
     transparent: true,
   });
   const geometry = new THREE.PlaneGeometry(1, 1, 32, 32);
@@ -135,7 +196,8 @@ function startRenderer() {
   let previous = 0;
   let lost = false;
   function schedule() {
-    if (!frame && !lost && !document.hidden) frame = requestAnimationFrame(draw);
+    if (!frame && !lost && !document.hidden)
+      frame = requestAnimationFrame(draw);
   }
 
   function draw(now: number) {
@@ -145,21 +207,33 @@ function startRenderer() {
     const decay = Math.exp(-Math.max(0, now - scroll.sample - 100) / 140);
     const target = THREE.MathUtils.clamp(scroll.input * decay, -150, 150);
     scroll.velocity = THREE.MathUtils.damp(scroll.velocity, target, 12, dt);
-    scroll.bend = THREE.MathUtils.damp(scroll.bend,
-      THREE.MathUtils.clamp(scroll.velocity * BEND_STRENGTH, -MAX_BEND, MAX_BEND),
-      BEND_SMOOTHING, dt);
-    if (Math.abs(target) + Math.abs(scroll.velocity) < 0.01) scroll.velocity = 0;
+    scroll.bend = THREE.MathUtils.damp(
+      scroll.bend,
+      THREE.MathUtils.clamp(
+        scroll.velocity * BEND_STRENGTH,
+        -MAX_BEND,
+        MAX_BEND,
+      ),
+      BEND_SMOOTHING,
+      dt,
+    );
+    if (Math.abs(target) + Math.abs(scroll.velocity) < 0.01)
+      scroll.velocity = 0;
     if (!scroll.velocity && Math.abs(scroll.bend) < 0.00001) scroll.bend = 0;
 
     let waving = false;
     const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
     for (const card of cards) {
-      if (!card.texture || !card.shown || (!card.near && !card.playing)) continue;
+      if (!card.texture || !card.shown || (!card.near && !card.playing))
+        continue;
       if (card.width <= 0 || card.height <= 0) continue;
 
       const work = card.mode === "work";
       const bend = work ? scroll.bend : 0;
-      const fringe = Math.min(Math.abs(scroll.velocity) * (work ? 0.015 : 0.002), work ? 0.02 : 0.02);
+      const fringe = Math.min(
+        Math.abs(scroll.velocity) * (work ? 0.015 : 0.002),
+        work ? 0.02 : 0.02,
+      );
       const oldWave = card.wave;
       const targetWave = work && card.playing ? 0.2 : 0;
       card.wave = THREE.MathUtils.damp(card.wave, targetWave, 4.6, dt);
@@ -169,12 +243,24 @@ function startRenderer() {
 
       const width = Math.max(1, Math.round(card.width * dpr));
       const height = Math.max(1, Math.round(card.height * dpr));
-      const resized = width !== card.canvas.width || height !== card.canvas.height;
-      if (!resized && !card.dirty && !card.playing && oldWave === card.wave &&
-          bend === card.bend && fringe === card.fringe) continue;
+      const resized =
+        width !== card.canvas.width || height !== card.canvas.height;
+      if (
+        !resized &&
+        !card.dirty &&
+        !card.playing &&
+        oldWave === card.wave &&
+        bend === card.bend &&
+        fringe === card.fringe
+      )
+        continue;
 
       if (surface.width < width || surface.height < height) {
-        renderer.setSize(Math.max(surface.width, width), Math.max(surface.height, height), false);
+        renderer.setSize(
+          Math.max(surface.width, width),
+          Math.max(surface.height, height),
+          false,
+        );
       }
       if (resized) {
         card.canvas.width = width;
@@ -186,11 +272,16 @@ function startRenderer() {
       camera.zoom = work ? 0.98 : 1;
       camera.aspect = aspect;
       camera.updateProjectionMatrix();
-      const viewHeight = fovFactor * distance / camera.zoom;
-      mesh.scale.set(viewHeight * aspect / IMAGE_SCALE, viewHeight / IMAGE_SCALE, 1);
+      const viewHeight = (fovFactor * distance) / camera.zoom;
+      mesh.scale.set(
+        (viewHeight * aspect) / IMAGE_SCALE,
+        viewHeight / IMAGE_SCALE,
+        1,
+      );
       const expansion = distance / (distance - Math.abs(card.wave));
       const maxBendOffset = Math.abs(bend) * 4.84 * (1 - BEND_CENTERING);
-      const halfHeight = (viewHeight / (2 * IMAGE_SCALE) + maxBendOffset) * expansion;
+      const halfHeight =
+        (viewHeight / (2 * IMAGE_SCALE) + maxBendOffset) * expansion;
       const source = card.texture.image as HTMLImageElement;
       uniforms.uTexture.value = card.texture;
       uniforms.uImageAspect.value = source.width / source.height;
@@ -199,21 +290,24 @@ function startRenderer() {
       uniforms.uCurves.value = card.wave;
       uniforms.uScrollBend.value = bend;
       uniforms.uAberration.value = fringe;
-      const fittedScale = Math.min(1, viewHeight * FIT_MARGIN / (2 * halfHeight),
-        FIT_MARGIN * IMAGE_SCALE / expansion);
+      const fittedScale = Math.min(
+        1,
+        (viewHeight * FIT_MARGIN) / (2 * halfHeight),
+        (FIT_MARGIN * IMAGE_SCALE) / expansion,
+      );
       uniforms.uFit.value = Math.pow(fittedScale, Math.max(0, BEND_SHRINK));
 
       renderer.setViewport(0, 0, width, height);
       renderer.setScissor(0, 0, width, height);
       renderer.render(scene, camera);
-      card.ctx.globalCompositeOperation = "copy";
-      card.ctx.drawImage(surface, 0, surface.height - height, width, height, 0, 0, width, height);
+      if (!copyFrame(card, width, height)) break;
       if (card.dirty) card.poster.style.visibility = "hidden";
       card.dirty = false;
       card.bend = bend;
       card.fringe = fringe;
     }
-    if (waving || Math.abs(target) >= 0.01 || scroll.velocity || scroll.bend) schedule();
+    if (waving || Math.abs(target) >= 0.01 || scroll.velocity || scroll.bend)
+      schedule();
     else previous = 0;
   }
 
@@ -222,13 +316,22 @@ function startRenderer() {
     lost = true;
     cancelAnimationFrame(frame);
     frame = 0;
+    previous = 0;
+    for (const card of cards) {
+      card.poster.style.visibility = "visible";
+      card.ctx.clearRect(0, 0, card.canvas.width, card.canvas.height);
+      card.dirty = true;
+    }
   }
   function refresh() {
     previous = 0;
     for (const card of cards) card.dirty = true;
     schedule();
   }
-  function onRestored() { lost = false; refresh(); }
+  function onRestored() {
+    lost = false;
+    refresh();
+  }
   wake = schedule;
   surface.addEventListener("webglcontextlost", onLost);
   surface.addEventListener("webglcontextrestored", onRestored);
@@ -244,6 +347,11 @@ function startRenderer() {
     material.dispose();
     renderer.dispose();
     renderer.forceContextLoss();
+    for (const card of cards) {
+      card.poster.style.visibility = "visible";
+      card.ctx.clearRect(0, 0, card.canvas.width, card.canvas.height);
+      card.dirty = true;
+    }
   };
 }
 
@@ -254,13 +362,21 @@ export function ImageEffectsCanvas() {
     wake();
   });
   useEffect(() => {
-    try { return startRenderer(); }
-    catch (error) { console.error("Portfolio renderer unavailable", error); }
+    try {
+      return startRenderer();
+    } catch (error) {
+      console.error("Portfolio renderer unavailable", error);
+    }
   }, []);
   return null;
 }
 
-export function ShaderImage({ img, mode, isPlaying = false, elevated = false }: Props) {
+export function ShaderImage({
+  img,
+  mode,
+  isPlaying = false,
+  elevated = false,
+}: Props) {
   const id = useId();
   const { activeView, setActiveView } = useImageLayer();
   const shown = activeView === null || activeView === id;
@@ -271,7 +387,7 @@ export function ShaderImage({ img, mode, isPlaying = false, elevated = false }: 
   useLayoutEffect(() => {
     if (!elevated) return;
     setActiveView(id);
-    return () => setActiveView(current => current === id ? null : current);
+    return () => setActiveView((current) => (current === id ? null : current));
   }, [elevated, id, setActiveView]);
 
   useLayoutEffect(() => {
@@ -282,17 +398,34 @@ export function ShaderImage({ img, mode, isPlaying = false, elevated = false }: 
     poster.style.visibility = "visible";
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const card: Card = {
-      canvas, ctx, poster, mode, playing: false, shown: true, near: false, dirty: true,
-      width: canvas.clientWidth, height: canvas.clientHeight,
-      time: 0, wave: 0, bend: 0, fringe: 0,
+      canvas,
+      ctx,
+      poster,
+      mode,
+      playing: false,
+      shown: true,
+      near: false,
+      dirty: true,
+      width: canvas.clientWidth,
+      height: canvas.clientHeight,
+      time: 0,
+      wave: 0,
+      bend: 0,
+      fringe: 0,
     };
     entry.current = card;
     cards.add(card);
 
-    const visibility = new IntersectionObserver(([result]) => {
-      card.near = result.isIntersecting;
-      if (card.near) { card.dirty = true; wake(); }
-    }, { rootMargin: PREPAINT_MARGIN + "px" });
+    const visibility = new IntersectionObserver(
+      ([result]) => {
+        card.near = result.isIntersecting;
+        if (card.near) {
+          card.dirty = true;
+          wake();
+        }
+      },
+      { rootMargin: PREPAINT_MARGIN + "px" },
+    );
     visibility.observe(canvas);
 
     const resize = new ResizeObserver(([result]) => {
@@ -304,12 +437,20 @@ export function ShaderImage({ img, mode, isPlaying = false, elevated = false }: 
     resize.observe(canvas);
 
     let disposed = false;
-    const texture = new THREE.TextureLoader().load(img, loaded => {
-      if (disposed) return;
-      card.texture = loaded;
-      card.dirty = true;
-      wake();
-    }, undefined, error => console.error("Portfolio texture load failed", img, error));
+    const texture = new THREE.TextureLoader().load(
+      img,
+      (loaded) => {
+        if (disposed) {
+          loaded.dispose();
+          return;
+        }
+        card.texture = loaded;
+        card.dirty = true;
+        wake();
+      },
+      undefined,
+      (error) => console.error("Portfolio texture load failed", img, error),
+    );
 
     return () => {
       disposed = true;
@@ -331,15 +472,44 @@ export function ShaderImage({ img, mode, isPlaying = false, elevated = false }: 
 
   const fallbackSize = Math.min(1 / IMAGE_SCALE, FIT_MARGIN) * 100 + "%";
   return (
-    <div className="image-canvas" style={{
-      position: "relative", width: "100%", height: "100%", pointerEvents: "none",
-      opacity: shown ? 1 : 0, transition: "opacity 200ms ease",
-    }}>
-      <img ref={posterRef} src={img} alt="" aria-hidden="true" draggable={false}
-        style={{ position: "absolute", inset: 0, margin: "auto", width: fallbackSize,
-          height: fallbackSize, maxWidth: "none", objectFit: "cover", objectPosition: "2% 2%" }} />
-      <canvas ref={canvasRef} aria-hidden="true"
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+    <div
+      className="image-canvas"
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        pointerEvents: "none",
+        opacity: shown ? 1 : 0,
+        transition: "opacity 200ms ease",
+      }}
+    >
+      <img
+        ref={posterRef}
+        src={img}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        style={{
+          position: "absolute",
+          inset: 0,
+          margin: "auto",
+          width: fallbackSize,
+          height: fallbackSize,
+          maxWidth: "none",
+          objectFit: "cover",
+          objectPosition: "2% 2%",
+        }}
+      />
+      <canvas
+        ref={canvasRef}
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+        }}
+      />
     </div>
   );
 }

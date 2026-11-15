@@ -25,6 +25,8 @@ body.active {
 @custom-variant 850 (@media (max-width: 850px));
 @custom-variant 768 (@media (max-width: 768px));
 @custom-variant 650 (@media (max-width: 650px));
+@custom-variant 400 (@media (max-width: 400px));
+@custom-variant 370 (@media (max-width: 370px));
 
 @layer base {
   .body-h1 {

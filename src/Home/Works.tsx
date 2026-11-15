@@ -142,7 +142,7 @@ function Work({ title, siteLink, details, img, summary }: Work) {
           setOpen(true);
           setElevated(true);
         }}
-        className="relative w-full max-w-[500px] max-h-[310px] 650:max-h-[200px] aspect-[1.3/1.1] cursor-pointer"
+        className="relative w-full max-w-[500px] max-h-[310px] 650:max-h-[200px]  400:aspect-[370/168] 350:aspect-[370/130] aspect-[1.3/1.1] cursor-pointer"
         ref={workImgParent}
       >
         <div

@@ -399,7 +399,7 @@ export default function ParticleCodeBracket() {
 
   return (
     <div
-      className="absolute inset-0 left-[-5%] 768:left-0 650:h-[80%] 650:top-[17%] h-full w-full pointer-events-auto z-[1]"
+      className="absolute inset-0 left-[-5%] 768:left-0 650:h-[80%] 650:top-[13%] h-full w-full pointer-events-auto z-[1]"
       style={{ touchAction: "pan-y pinch-zoom" }}
     >
       <Canvas

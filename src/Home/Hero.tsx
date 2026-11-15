@@ -5,10 +5,10 @@ export default function Hero() {
   const time = useLiveTime();
 
   return (
-    <section className="h-[100vh] 768:h-[80vh] px-[40px] 650:px-[16px] flex flex-col relative overflow-hidden">
+    <section className="h-[100vh] 768:h-[80vh] 650:h-[85vh] px-[40px] 650:px-[16px] flex flex-col relative overflow-hidden">
       <p className="mt-[40px] body-sm">t3ch_spawn</p>
 
-      <h1 className="mt-[12vh] body-h1 relative z-[3]">BOLUWATIFE</h1>
+      <h1 className="mt-[12vh] 650:mt-[8vh] body-h1 relative z-[3]">BOLUWATIFE</h1>
 
       <ParticleCodeBracket />
 
